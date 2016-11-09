@@ -188,7 +188,7 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
             using (StreamWriter OUT = new StreamWriter(Dts.Variables["User::LogFolder"].Value.ToString() + "\\" + "OutputLog_" + datetime + ".log", true))
             {
                 DateTime startAll = DateTime.Now;
-                Parallel.ForEach(fileEntries, (fileName, loopState) =>
+                /*Parallel.ForEach(fileEntries, (fileName, loopState) =>
                 {
                     SqlConnection myADONETConnection = new SqlConnection();
                     using (myADONETConnection = (SqlConnection)(Dts.Connections["DB_Conn_StagingArea"].AcquireConnection(Dts.Transaction) as SqlConnection))
@@ -246,6 +246,34 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
                 });//END Paralell add
 
                 OUT.WriteLine("Took " + (DateTime.Now - startAll).TotalSeconds + " seconds to import " + fileEntries.Length + " raw files.");
+                */
+                if (success)
+                {
+                    try
+                    {
+                        using (SqlConnection connection = (SqlConnection)(Dts.Connections["DB_Conn_StagingArea"].AcquireConnection(Dts.Transaction) as SqlConnection))
+                        {
+                            connection.Open();
+                            using (SqlCommand command = new SqlCommand("select c.name from sys.columns c inner join sys.tables t on c.object_id = t.object_id where t.name = [" + TableName + "]", connection))
+                            {
+                                using (SqlDataReader reader = command.ExecuteReader())
+                                {
+                                    OUT.WriteLine(reader.GetValue(0).ToString());
+                                }
+                            }
+                        }
+                    }
+                     catch (Exception exception)
+                    {
+                        using (StreamWriter sw = new StreamWriter(Dts.Variables["User::LogFolder"].Value.ToString()
+                            + "\\" + "ErrorLog_" + datetime + ".log", true))
+                        {
+                            sw.WriteLine(exception.ToString());
+                            success = false;
+                        }
+                    }
+                }
+
                 OUT.WriteLine(success ? "Success!!" : "Failure :C");
             }
 
