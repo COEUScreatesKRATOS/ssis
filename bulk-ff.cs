@@ -179,9 +179,14 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
             return buff;
         }
 
+        public static List<string> columnNames(string line, char delimiter)
+        {
+            return (delimiter == ',' ? splitCSV(line) : splitDefault(line, delimiter));
+        }
+
         public static string normalize(string line, char delimiter)
         {
-            List<string> columns = (delimiter == ',' ? splitCSV(line) : splitDefault(line, delimiter));
+            List<string> columns = columnNames(line, delimiter);
             List<string> buff = new List<string>();
             foreach (string col in columns)
             {
@@ -191,20 +196,22 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
             return string.Join(",\n", buff);
         }
 
-        public static string columnHeaders(string line, char delimiter)
+        public static string columnHeaders(string line, Dictionary<string, string> columnLengths, char delimiter)
         {
-            List<string> columns = (delimiter == ',' ? splitCSV(line) : splitDefault(line, delimiter));
+            List<string> columns = columnNames(line, delimiter);
             List<string> buff = new List<string>();
             foreach (string col in columns)
             {
-                buff.Add("   " + col.Replace(" ", "_") + " nvarchar(max)");
+                string v;
+                string max = columnLengths.TryGetValue(col, out v) ? v : "max";
+                buff.Add("   " + col.Replace(" ", "_") + " nvarchar(" + max + ")");
             }
             buff.Add("   FileName nvarchar(max)");
 
             return string.Join(",\n", buff);
         }
 
-        public string createTable(string DBName, string fileName, string fileDelimiter, StreamWriter OUT)
+        public string createTable(string DBName, string fileName, string fileDelimiter, Dictionary<string, string> columnLengths, StreamWriter OUT)
         {
             using (SqlConnection myADONETConnection = (SqlConnection)(Dts.Connections["DB_Conn_StagingArea"].AcquireConnection(Dts.Transaction) as SqlConnection))
             {
@@ -216,7 +223,7 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
                         throw new Exception("Unable to read from: " + fileName);
                     }
 
-                    string columnList = columnHeaders(line, fileDelimiter.ToCharArray()[0]);
+                    string columnList = columnHeaders(line, columnLengths, fileDelimiter.ToCharArray()[0]);
                     string tableName = Path.GetFileNameWithoutExtension(fileName).Replace(" ", "_").Replace("(", "").Replace(")", "").Replace("@", "").Replace("'", "");
 
                     string createTable = "USE " + DBName + "\n" +
@@ -234,9 +241,51 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
             }
         }
 
-        private Dictionary<string, int> maxColumnLengths(string[] fileEntries)
+        private Dictionary<string, string> maxColumnLengths(string[] fileNames, char delimiter)
         {
-            throw new NotImplementedException();
+            Dictionary<int, int> columns = new Dictionary<int, int>();
+            Dictionary<int, string> headerMap = null;
+            foreach (string fileName in fileNames)
+            {
+                int count = 0;
+                string line = null;
+                using (System.IO.StreamReader SourceFile = new System.IO.StreamReader(fileName))
+                {
+                    while ((line = SourceFile.ReadLine()) != null)
+                    {
+                        if (headerMap == null)
+                        {
+                            headerMap = new Dictionary<int, string>();
+                            List<string> colNames = columnNames(line, delimiter);
+                            for (int i = 0; i < colNames.Count; i++)
+                            {
+                                headerMap[i] = colNames[i];
+                                columns[i] = 0;
+                            }
+                        } else if (count > 0)
+                        {
+                            List<string> cols = columnNames(line, delimiter);
+                            for (int i = 0; i < cols.Count; i++)
+                            {
+                                int length = cols[i].Length;
+                                if (columns[i] < length)
+                                {
+                                    columns[i] = length;
+                                }
+                            }
+                        }
+                        count++;
+                    }
+                }
+            }
+            
+            Dictionary<string, string> maxColumns = new Dictionary<string, string>();
+            foreach (KeyValuePair<int, int> entry in columns)
+            {
+                string val = entry.Value > 0 ? "" + entry.Value : "9";
+                maxColumns[headerMap[entry.Key]] = val;
+            }
+            return maxColumns;
         }
 
 
@@ -271,8 +320,8 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
             {
                 try
                 {
-                    Dictionary<string, int> columnLengths = this.maxColumnLengths(fileEntries);
-                    string TableName = this.createTable(DBName, fileEntries[0], FileDelimiter, OUT);
+                    Dictionary<string, string> columnLengths = this.maxColumnLengths(fileEntries, FileDelimiter[0]);
+                    string TableName = this.createTable(DBName, fileEntries[0], FileDelimiter, columnLengths, OUT);
                     OUT.WriteLine("Importing " + fileEntries.Length + " source files into " + TableName);
 
                     DateTime startAll = DateTime.Now;
@@ -283,41 +332,38 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
                         {
                             try
                             {
-                            //Writing Data of File Into Table
-                            int counter = 0;
-                                string line;
-                            //MessageBox.Show(fileName);
 
-                            DateTime start = DateTime.Now;
+                                //Writing Data of File Into Table
+                                int counter = 0;
+                                string line;
+
+                                DateTime start = DateTime.Now;
                                 using (System.IO.StreamReader SourceFile = new System.IO.StreamReader(fileName))
                                 {
                                     while ((line = SourceFile.ReadLine()) != null)
                                     {
-                                    //TODO: HACK TO CLEAN OFF NORMALIZATION IN EXCEL REMOVE ME!!
-                                    //line = line.Replace(":apos", "'").Replace(":comma", ",");
+                                        if (counter > 0)
+                                        {
+                                            string query = "USE " + DBName + "\n" +
+                                                            " INSERT INTO " + TableName + " VALUES (\n" +
+                                                            normalize(line, FileDelimiter.ToCharArray()[0]) +
+                                                            ",\n   '" + fileName + "'\n)";
 
-                                    //MessageBox.Show(line.ToString());
-                                    if (counter > 0)
-                                    {
-                                        string query = "USE " + DBName + "\n" +
-                                                        " INSERT INTO " + TableName + " VALUES (\n" +
-                                                        normalize(line, FileDelimiter.ToCharArray()[0]) +
-                                                        ",\n   '" + fileName + "'\n)";
-
-                                        OUT.WriteLine("Running query for: " + fileName + "\n" + query);
-                                        SqlCommand myCommand1 = new SqlCommand(query, myADONETConnection);
+                                            //OUT.WriteLine("Running query for: " + fileName + "\n" + query);
+                                            SqlCommand myCommand1 = new SqlCommand(query, myADONETConnection);
                                             myCommand1.ExecuteNonQuery();
                                         }
 
                                         counter++;
                                     }
                                 }
-                                OUT.WriteLine("Took " + (DateTime.Now - start).TotalSeconds + " seconds to execute " + counter + " import statements for " + fileName + ".");
 
-                            //move the file to archive folder after adding datetime to it
-                            File.Move(fileName, ArchiveFolder + "\\" + (fileName.Replace(SourceFolderPath, "")).Replace(FileExtension, "") + "_" + datetime + FileExtension);
+                                //OUT.WriteLine("Took " + (DateTime.Now - start).TotalSeconds + " seconds to execute " + counter + " import statements for " + fileName + ".");
 
-                                OUT.WriteLine("Took " + (DateTime.Now - start).TotalSeconds + " seconds to import and archive " + fileName + ".");
+                                //move the file to archive folder after adding datetime to it
+                                File.Move(fileName, ArchiveFolder + "\\" + (fileName.Replace(SourceFolderPath, "")).Replace(FileExtension, "") + "_" + datetime + FileExtension);
+
+                                //OUT.WriteLine("Took " + (DateTime.Now - start).TotalSeconds + " seconds to import and archive " + fileName + ".");
                             }
                             catch (Exception exception)
                             {
@@ -335,7 +381,8 @@ namespace ST_9fe3f0c506744f589075f4e22c70b50b
 
                     OUT.WriteLine("Took " + (DateTime.Now - startAll).TotalSeconds + " seconds to import " + fileEntries.Length + " raw files.");
                     OUT.WriteLine(success ? "Success!!" : "Failure :C");
-                } catch (Exception exception)
+                }
+                catch (Exception exception)
                 {
                     // Create Log File for Errors
                     using (StreamWriter sw = new StreamWriter(Dts.Variables["User::LogFolder"].Value.ToString() + "\\" + "ErrorLog_" + datetime + ".log", true))
